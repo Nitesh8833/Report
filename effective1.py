@@ -1,22 +1,23 @@
 import re
 import pandas as pd
 
-def drop_rows_only_effective(df: pd.DataFrame) -> pd.DataFrame:
-    # Find the Effective date column (case/spacing-insensitive)
-    def norm(s): return re.sub(r"\W+", " ", str(s)).strip().lower()
-    eff_col = next((c for c in df.columns if norm(c) == "effective date"), None)
-    if eff_col is None:
-        return df  # nothing to do
+def remove_trailing_notes(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
 
-    # Treat pure-blank strings in non-effective columns as NA
-    other_cols = [c for c in df.columns if c != eff_col]
-    obj_cols = [c for c in other_cols if df[c].dtype == "object"]
-    for col in obj_cols:
-        s = df[col]
-        blank = s.notna() & s.astype(str).str.strip().eq("")
-        df.loc[blank, col] = pd.NA
+    # 1) Keep only rows that have data in at least one key column
+    key_cols = [c for c in ["Medicaid Provider #", "Medicare Provider #", "NPI #", "Location Name"] if c in df.columns]
+    if key_cols:
+        df = df[df[key_cols].notna().any(axis=1)]
 
-    # Drop rows where all non-effective columns are NA but Effective date has a value
-    only_eff_mask = df[other_cols].isna().all(axis=1) & df[eff_col].notna()
-    df = df.loc[~only_eff_mask].reset_index(drop=True)
+    # 2) Drop rows that look like notes/paths in Facility
+    if "Facility" in df.columns:
+        note_pat = r"(?i)^(note\b|[A-Z]:\\|resource\s+directory|matrix)"
+        df = df[~df["Facility"].astype(str).str.strip().str.match(note_pat, na=False)]
+
+        # 3) If a Facility cell has multiple lines, keep only the first line
+        df["Facility"] = df["Facility"].astype(str).str.splitlines().str[0].str.strip()
+        df.loc[df["Facility"].eq("nan"), "Facility"] = pd.NA  # clean artifact
+
+    # 4) Drop rows that are completely empty after cleanup
+    df = df.dropna(how="all").reset_index(drop=True)
     return df
